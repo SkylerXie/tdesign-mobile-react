@@ -9,13 +9,13 @@ export default function useDefault<T, P extends any[]>(
   value: T,
   defaultValue: T,
   onChange: ChangeHandler<T, P>,
-): [T, ChangeHandler<T, P>] {
+): [T, ChangeHandler<T, P>, (value: T) => void] {
   // 无论是否受控，都要 useState，因为 Hooks 是无条件的
   const [internalValue, setInternalValue] = useState<T>(defaultValue);
 
   // 受控模式
   if (typeof value !== 'undefined') {
-    return [value, onChange || noop];
+    return [value, onChange || noop, setInternalValue];
   }
 
   // 非受控模式
@@ -27,5 +27,6 @@ export default function useDefault<T, P extends any[]>(
         onChange(newValue, ...args);
       }
     },
+    setInternalValue,
   ];
 }

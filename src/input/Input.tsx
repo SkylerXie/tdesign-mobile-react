@@ -1,5 +1,5 @@
-import type { CompositionEvent, FocusEvent, FormEvent, TouchEvent } from 'react';
-import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import type { ChangeEvent, CompositionEvent, CSSProperties, FocusEvent, FormEvent, TouchEvent } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import classNames from 'classnames';
 import { isFunction } from 'lodash-es';
 import { BrowseIcon, BrowseOffIcon, CloseCircleFilledIcon } from 'tdesign-icons-react';
@@ -46,6 +46,8 @@ const Input = forwardRef<InputRefProps, InputProps>((props, ref) => {
     tips,
     type,
     readonly,
+    extra,
+    cursorColor,
     onBlur,
     onClear,
     onFocus,
@@ -54,11 +56,10 @@ const Input = forwardRef<InputRefProps, InputProps>((props, ref) => {
     onChange,
   } = useDefaultProps(props, inputDefaultProps);
 
-  const [showClear, setShowClear] = useState<boolean>(false);
-  const [innerValue, setInnerValue] = useDefault(value, defaultValue, onChange);
+  const [innerValue, setInnerValue, updateValue] = useDefault(value, defaultValue, onChange);
   const [renderType, setRenderType] = useState(type);
   const inputRef = useRef<HTMLInputElement>(null);
-  const focused = useRef<boolean>(false);
+  const [focused, setFocused] = useState<boolean>(false);
   const status = props.status || 'default';
   const { classPrefix } = useConfig();
   const rootClassName = `${classPrefix}-input`;
@@ -78,18 +79,15 @@ const Input = forwardRef<InputRefProps, InputProps>((props, ref) => {
     blur,
   }));
 
-  useEffect(() => {
-    const computeShowClear = () => {
-      if (disabled || readonly) {
-        return false;
-      }
-      if (clearable) {
-        return clearTrigger === 'always' || (clearTrigger === 'focus' && focused.current);
-      }
+  const showClear = useMemo<boolean>(() => {
+    if (disabled || readonly) {
       return false;
-    };
-    setShowClear(computeShowClear());
-  }, [clearTrigger, clearable, disabled, readonly]);
+    }
+    if (clearable) {
+      return clearTrigger === 'always' || (clearTrigger === 'focus' && focused);
+    }
+    return false;
+  }, [clearTrigger, clearable, disabled, focused, readonly]);
 
   useEffect(() => {
     if (autofocus) {
@@ -102,63 +100,82 @@ const Input = forwardRef<InputRefProps, InputProps>((props, ref) => {
   }, [type]);
 
   function focus() {
-    focused.current = true;
+    setFocused(true);
     inputRef.current?.focus();
   }
 
   function blur() {
-    focused.current = false;
+    setFocused(false);
     inputRef.current?.blur();
   }
 
-  const inputValueChangeHandle = (e: FormEvent<HTMLInputElement>) => {
+  const handleInputValue = (e: FormEvent<HTMLInputElement>) => {
     const { value } = e.target as HTMLInputElement;
     const { allowInputOverMax, maxcharacter } = props;
-    if (!allowInputOverMax && maxcharacter && !Number.isNaN(maxcharacter)) {
+
+    // 如果允许超出最大输入限制，直接更新值并返回
+    if (allowInputOverMax) {
+      return value;
+    }
+
+    // 根据不同的限制条件处理输入值
+    let finalValue = value;
+
+    // 处理maxcharacter限制（优先级高于maxlength）
+    if (maxcharacter && !Number.isNaN(maxcharacter)) {
       const { characters } = getCharacterLength(value, maxcharacter) as {
         length: number;
         characters: string;
       };
-      setInnerValue(characters);
-    } else {
-      setInnerValue(value);
+      finalValue = characters;
     }
+    // 处理maxlength限制
+    else if (resultMaxLength > 0 && value.length > resultMaxLength) {
+      finalValue = value.slice(0, resultMaxLength);
+    }
+
+    return finalValue;
   };
 
-  const handleInput = (e: FormEvent<HTMLInputElement>) => {
-    // 中文输入的时候inputType是insertCompositionText所以中文输入的时候禁止触发。
-    if (e instanceof InputEvent) {
-      const checkInputType = e.inputType && e.inputType === 'insertCompositionText';
-      if (e.isComposing || checkInputType) return;
+  const handleInput = (e: ChangeEvent<HTMLInputElement>) => {
+    const finalValue = handleInputValue(e);
+    // react 中为合成事件，需要通过 nativeEvent 获取原始的事件
+    const nativeEvent = e.nativeEvent as InputEvent;
+    // 中文输入的时候 inputType 是 insertCompositionText 所以中文输入的时候禁止触发。
+    if (nativeEvent.isComposing || nativeEvent.inputType === 'insertCompositionText') {
+      updateValue(finalValue);
+      return;
     }
-    inputValueChangeHandle(e);
+
+    setInnerValue(finalValue, { e, trigger: 'input' });
   };
 
   const handleClear = (e: TouchEvent<HTMLInputElement>) => {
     e.preventDefault();
-    setInnerValue('');
+    setInnerValue('', { e, trigger: 'clear' });
     focus();
     onClear?.({ e });
   };
 
   const handleFocus = (e: FocusEvent<HTMLInputElement>) => {
-    focused.current = true;
+    setFocused(true);
     onFocus?.(innerValue, { e });
   };
 
   const handleBlur = (e: FocusEvent<HTMLInputElement>) => {
-    focused.current = false;
-
+    setFocused(false);
     // 失焦时处理 format
     if (isFunction(format)) {
-      setInnerValue(format(innerValue));
+      setInnerValue(format(innerValue), { e, trigger: 'blur' });
     }
 
     onBlur?.(innerValue, { e });
   };
 
   const handleCompositionend = (e: CompositionEvent<HTMLInputElement>) => {
-    inputValueChangeHandle(e);
+    const finalValue = handleInputValue(e);
+    // 更新输入值
+    setInnerValue(finalValue, { e, trigger: 'input' });
   };
 
   const handlePwdIconClick = () => {
@@ -174,6 +191,8 @@ const Input = forwardRef<InputRefProps, InputProps>((props, ref) => {
       <div className={`${rootClassName}__label`}>{parseTNode(label)}</div>
     </div>
   );
+
+  const renderExtra = () => parseTNode(extra);
 
   const renderClearable = () =>
     showClear ? (
@@ -200,6 +219,10 @@ const Input = forwardRef<InputRefProps, InputProps>((props, ref) => {
   const renderTips = () =>
     tips ? <div className={`${rootClassName}__tips ${rootClassName}--${align}`}>{parseTNode(tips)}</div> : null;
 
+  const style: CSSProperties = {
+    '--td-input-cursor-color': cursorColor,
+  } as any;
+
   return withNativeProps(
     props,
     <div className={rootClasses}>
@@ -217,13 +240,13 @@ const Input = forwardRef<InputRefProps, InputProps>((props, ref) => {
             autoComplete={autocomplete}
             placeholder={placeholder}
             readOnly={readonly}
-            maxLength={resultMaxLength || -1}
             enterKeyHint={enterkeyhint}
             spellCheck={spellcheck}
             onFocus={handleFocus}
             onBlur={handleBlur}
             onInput={handleInput}
             onCompositionEnd={handleCompositionend}
+            style={style}
           />
           {renderClearable()}
           {renderSuffix()}
@@ -231,6 +254,7 @@ const Input = forwardRef<InputRefProps, InputProps>((props, ref) => {
         </div>
         {renderTips()}
       </div>
+      {renderExtra()}
     </div>,
   );
 });
